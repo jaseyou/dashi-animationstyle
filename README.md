@@ -1,4 +1,4 @@
-# 风格动画（Claude Code skill）
+# dashi-animationstyle：风格动画（Claude Code skill）
 
 把一段 15–60 秒的中文知识口播，交给 Claude 做成某种画风的讲解动画：1920×1080、30 帧/秒的 mp4，带口播和字幕，能直接拖进剪映接着剪。
 
@@ -29,7 +29,7 @@
 
 ```bash
 brew install node ffmpeg
-git clone https://github.com/chuspeeism/style-animation-skill.git ~/.claude/skills/风格动画
+git clone https://github.com/chuspeeism/dashi-animationstyle.git ~/.claude/skills/dashi-animationstyle
 ```
 
 装好后在 Claude Code 里说：「检查一下风格动画的环境，再渲一个例子看看。」Claude 会跑自检，然后用自带的 Token 例子渲一段 21 秒的成片（Apple M2 Max 上每套 34–72 秒）。
