@@ -20,9 +20,14 @@
 </style>
 </head>
 <body>
-<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<div id="stage">
+  <canvas id="gl" width="1440" height="540" style="display:none"></canvas>
+  <canvas id="c" width="1920" height="1080"></canvas>
+</div>
 <script src="timeline.js"></script>
 <script src="动效部件.js"></script>
+<script src="three.min.js"></script>
+<script src="three_craft.js"></script>
 <script>
 'use strict';
 // ===== 底座：换内容时不用改 =====
@@ -425,35 +430,158 @@ function drawKey(it, t, onSea) {
   }
   g.restore();
 }
+// ---------- Three.js 周日报刊立体活字印章台 & 深海科考剖面仪 ----------
+const glCv = document.getElementById('gl');
+const VP_W = 1440, VP_H = 540;
+const stage3D = Craft3D.createStage(glCv, {
+  studio: 'editorialPaper',
+  exposure: 1.0,
+  fov: 34,
+  shadows: true,
+  ambientColor: 0xeef3fc,
+  ambientIntensity: 0.48,
+  keyColor: 0xfff8eb,
+  keyIntensity: 2.1,
+  fillColor: 0x8096c1,
+  fillIntensity: 0.75,
+  rimColor: 0xd3ab7d,
+  rimIntensity: 0.9,
+});
+const { renderer, scene, camera } = stage3D;
+
+const PRESS_GROUPS = SECS.map((sc, i) => {
+  const grp = new THREE.Group();
+  scene.add(grp);
+  const core = Craft3D.createNauticalCore(1.12, { red: i % 2 === 1 });
+  grp.add(core);
+
+  const ringOuter = new THREE.Mesh(
+    Craft3D.precisionRingGeo(1.52, 1.65, 0.06, 80),
+    Craft3D.Materials.clay(i === 0 ? 0x1d3d8a : 0xd3ab7d, { roughness: 0.3 })
+  );
+  grp.add(ringOuter);
+
+  const blocks = sc.items.map((it, j) => {
+    const col = it.role === 'A' ? 0xbb3633 : it.role === 'B' ? 0x1d3d8a : (j % 2 ? 0xead8bb : 0xcfd6ee);
+    const m = new THREE.Mesh(
+      Craft3D.roundedBoxGeo(1.15, 0.42, 0.65, 0.05, 3),
+      Craft3D.Materials.clay(col, { roughness: 0.32 })
+    );
+    m.castShadow = m.receiveShadow = true;
+    const a = (j / Math.max(1, sc.items.length)) * TAU - 0.45;
+    const tx = Math.cos(a) * 2.55, ty = Math.sin(a) * 1.15, tz = 0.35 + (j % 2) * 0.35;
+    m.position.set(tx, ty, tz);
+    grp.add(m);
+    return { it, m, tx, ty, tz };
+  });
+  grp.userData = { core, ringOuter, blocks };
+  return grp;
+});
+
+function renderPress3D(idx, s, t) {
+  PRESS_GROUPS.forEach((grp, k) => { grp.visible = (k === idx); });
+  const dur = Math.max(0.4, (SECS[idx + 1] ? SECS[idx + 1].s.start : TL.duration) - s.start);
+  const u = P(t, s.start, dur);
+  const { core, ringOuter, blocks } = PRESS_GROUPS[idx].userData;
+
+  const camA = -0.28 + u * 0.56;
+  camera.position.set(Math.sin(camA) * 8.6, lerp(1.2, 0.6, sine(u)), Math.cos(camA) * 8.6);
+  camera.lookAt(0, 0, 0);
+  camera.updateMatrixWorld();
+
+  core.rotation.set(-0.38 + Math.cos(t * 0.5) * 0.1, 0.48 + Math.sin(t * 0.65) * 0.25, 0);
+  if (!PRESS_GROUPS[idx].userData._beams) {
+    PRESS_GROUPS[idx].userData._beams = blocks.map((b, jj) => {
+      const bm = Craft3D.createEnergyStream([b.tx, b.ty, b.tz], [b.tx*0.4, b.ty+0.55, 0.8], [0,0,0.15], { color: idx===0 ? 0x1d3d8a : 0xead8bb, radius: 0.028, pulses: 2, intensity: 1.3 });
+      PRESS_GROUPS[idx].add(bm); return bm;
+    });
+  }
+  PRESS_GROUPS[idx].userData._beams.forEach((bm, jj) => bm.userData.update(t, P(t, blocks[jj].it.t0, 0.4), 0.75, jj * 0.3));
+  core.userData.needle.rotation.z = -t * 1.1;
+  ringOuter.rotation.z = t * 0.35;
+  ringOuter.rotation.x = 0.25 + Math.sin(t * 0.6) * 0.15;
+
+  blocks.forEach((b, j) => {
+    const p = outBack(P(t, b.it.t0 - 0.05, 0.36));
+    b.m.scale.setScalar(Math.max(0.001, p));
+    b.m.position.y = b.ty + Math.sin(t * 2.0 + j) * 0.07;
+    b.m.rotation.y = Math.sin(t * 0.9 + j) * 0.14;
+  });
+  renderer.render(scene, camera);
+  return blocks;
+}
+
 function drawCard0(t) {
-  const sc = SECS[0], s = sc.s, p = P(t, s.start + 0.1, 0.4); if (p <= 0) return;
+  const sc = SECS[0], s = sc.s, p = P(t, s.start + 0.08, 0.4); if (p <= 0) return;
   const { x, y, w, h } = CARD0, x0 = x - w / 2, y0 = y - h / 2;
   g.save(); g.globalAlpha = clamp(p * 2);
   g.fillStyle = C.shadow; g.fillRect(x0 + 8, y0 + 10, w, h);
   g.fillStyle = C.paper; g.fillRect(x0, y0, w, h);
   g.strokeStyle = C.ink; g.lineWidth = 2; strokeReveal(x0, y0, w, h, 2, outC(p));
-  g.fillStyle = C.head; g.fillRect(x0, y0, w, 56);
-  textLS('本 期 要 点', x0 + 28, y0 + 29, fSans(700, 26), '#ffffff', 4, 'left');
+  g.fillStyle = C.head; g.fillRect(x0, y0, w, 54);
+  textLS('本 期 要 点 · 立体图解', x0 + 26, y0 + 28, fSans(700, 24), '#ffffff', 4, 'left');
+  text(sc.title, x, y0 + 98, fSong(900, 44), C.ink);
+
+  const blocks = renderPress3D(0, s, t);
+  const dw = w - 36, dh = h - 135, dx = x0 + 18, dy = y0 + 124;
+  g.drawImage(glCv, dx, dy, dw, dh);
+
+  blocks.forEach((b, j) => {
+    const q = outC(P(t, b.it.t0, 0.32)); if (q <= 0) return;
+    const pr = Craft3D.projectToHUD(camera, b.m.position.x, b.m.position.y, b.m.position.z, dw, dh);
+    if (!pr.visible) return;
+    const ax = dx + pr.x, ay = dy + pr.y;
+    const side = pr.x < dw / 2 ? -1 : 1;
+    const lx = clamp(ax + side * 120, x0 + 150, x0 + w - 150), ly = clamp(ay - 44, dy + 38, y0 + h - 38);
+    leader([[ax, ay], [lx, ly]], q, C.ink, 2, 4.5);
+    const f = fSong(900, 34), ww = tw(b.it.w, f) + 28;
+    g.fillStyle = b.it.role === 'A' ? C.red : b.it.role === 'B' ? C.blue : C.paper;
+    g.strokeStyle = C.ink; g.lineWidth = 1.5;
+    g.fillRect(lx - ww / 2, ly - 24, ww, 46);
+    if (!b.it.role) g.strokeRect(lx - ww / 2, ly - 24, ww, 46);
+    text(b.it.w, lx, ly, f, b.it.role ? '#ffffff' : C.head);
+  });
   g.restore();
-  g.save(); g.beginPath(); g.rect(x0, y0, (w) * outC(P(t, s.start + 0.25, 0.5)), h); g.clip();
-  text(sc.title, x, y0 + 130, sc.tf, C.ink);
-  g.restore();
-  for (const it of sc.items) drawKey(it, t, false);
 }
+
 function drawSeaSection(sc, t) {
-  const { s, i, items, title, tf } = sc, y = secY(i);
+  const { s, i, title, tf } = sc, y = secY(i);
   if (t < s.start - 0.2) return;
-  const pa = P(t, s.start + 0.15, 0.45);
-  g.save(); g.beginPath(); g.rect(160, y - 200, 1600 * outC(pa), 140); g.clip();
-  text(title, 960, y - 130, tf, '#ffffff');
+  const pa = P(t, s.start + 0.12, 0.45);
+  g.save(); g.beginPath(); g.rect(160, y - 270, 1600 * outC(pa), 120); g.clip();
+  text(title, 960, y - 210, tf, '#ffffff');
   g.restore();
-  g.fillStyle = 'rgba(255,255,255,0.85)'; g.fillRect(960 - 320 * outC(pa), y - 72, 640 * outC(pa), 2.5);   // 标题下的白细线
-  for (const it of items) {   // 白引线：标题下细线 → 每个纸条
-    const q = outC(P(t, it.t0 - 0.12, 0.3));
-    if (q > 0) leader([[it.x, y - 70], [it.x, it.y - KH / 2 - 10]], q, 'rgba(255,255,255,0.9)', 2, 4.5);
-    drawKey(it, t, true);
-  }
+  g.fillStyle = 'rgba(255,255,255,0.85)'; g.fillRect(960 - 320 * outC(pa), y - 156, 640 * outC(pa), 2.5);
+
+  const blocks = renderPress3D(i, s, t);
+  const dx = 960 - VP_W / 2, dy = y - 135;
+  g.save(); g.globalAlpha = outC(pa);
+  g.drawImage(glCv, dx, dy, VP_W, VP_H);
+  g.restore();
+
+  blocks.forEach((b, j) => {
+    const q = outC(P(t, b.it.t0 - 0.05, 0.32)); if (q <= 0) return;
+    const pr = Craft3D.projectToHUD(camera, b.m.position.x, b.m.position.y, b.m.position.z, VP_W, VP_H);
+    if (!pr.visible) return;
+    const ax = dx + pr.x, ay = dy + pr.y;
+    const side = pr.x < VP_W / 2 ? -1 : 1;
+    const lx = clamp(ax + side * 165, 220, W - 220), ly = clamp(ay - 55 - (j % 2) * 32, y - 110, y + 330);
+    leader([[ax, ay], [lx, ly]], q, 'rgba(255,255,255,0.92)', 2.2, 5);
+    const f = fSong(900, 40), ww = tw(b.it.w, f) + 34, hh = 58;
+    g.save(); g.globalAlpha = q;
+    if (b.it.role) {
+      g.fillStyle = C.paper; g.fillRect(lx - ww / 2 - 5, ly - hh / 2 - 5, ww + 10, hh + 10);
+      g.fillStyle = b.it.role === 'B' ? C.blue : C.red; g.fillRect(lx - ww / 2, ly - hh / 2, ww, hh);
+      text(b.it.w, lx, ly + 2, f, '#ffffff');
+    } else {
+      g.fillStyle = 'rgba(8,18,48,0.42)'; g.fillRect(lx - ww / 2 + 4, ly - hh / 2 + 6, ww, hh);
+      g.fillStyle = C.paper; g.fillRect(lx - ww / 2, ly - hh / 2, ww, hh);
+      text(b.it.w, lx, ly + 2, f, C.ink);
+    }
+    g.restore();
+  });
 }
+
 function drawRunningHead(t) {   // 潜到海里以后，顶上出现一条报纸页眉
   const t0 = SECS[1] ? SECS[1].s.start + 0.05 : TL.duration + 1;
   const p = outC(P(t, t0, 0.35)); if (p <= 0) return;

@@ -101,11 +101,26 @@ for (const s of Array.isArray(sb.shots) ? sb.shots : []) for (const k of s['时�
 
 // ---------- 全片固定上色的词（强调色 A/B）和字幕里要强调的词 ----------
 const hl = (sb['高亮'] || []).map((h, i) => (typeof h === 'string' ? { text: h, role: i === 0 ? 'A' : 'B' } : { text: h.text, role: h.role || (i === 0 ? 'A' : 'B') }));
+
+// ---------- 遮盖型转场安全检测（开场 0.5s 内或切点后 0.45s 内有关键词时自动避让卷角/橡皮擦/色块横扫/圆遮罩） ----------
+const markList = Object.entries(marks);
+const unsafeOpeningCover = markList.some(([, m]) => m.start < 0.50);
+const unsafeCoverCuts = [];
+shots.slice(1).forEach((s, k) => {
+  const hit = markList.filter(([, m]) => m.start >= s.start - 0.12 && m.start <= s.start + 0.45);
+  if (hit.length) {
+    unsafeCoverCuts.push(k);
+    console.log(`  注意：镜头交界 #${k}（${s.start.toFixed(2)}s）附近 0.45s 内有关键词（${hit.map(([n]) => n).join('、')}），模板将自动避开遮盖型转场`);
+  }
+});
+if (unsafeOpeningCover) console.log('  注意：开场 0.50s 内有关键词，模板将自动跳过开场遮盖圆洞');
+
 const TL = {
   duration, fps: sb.fps || 30, size: sb.size || [1920, 1080],
   title: sb['标题'] || '',
   text: subs.text || cues.map((c) => c.text).join(''),
   cues, chars: subs.chars, shots, marks,
+  unsafeOpeningCover, unsafeCoverCuts,
   highlights: hl,
   emphasis: sb['字幕强调'] || [],
   assets: sb['素材'] ?? null,

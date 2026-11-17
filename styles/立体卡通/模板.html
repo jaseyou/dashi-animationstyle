@@ -19,9 +19,14 @@
 </style>
 </head>
 <body>
-<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<div id="stage">
+  <canvas id="gl" width="1624" height="813" style="display:none"></canvas>
+  <canvas id="c" width="1920" height="1080"></canvas>
+</div>
 <script src="timeline.js"></script>
 <script src="动效部件.js"></script>
+<script src="three.min.js"></script>
+<script src="three_craft.js"></script>
 <script>
 'use strict';
 // v1.3 默认动效开关：true = 背景一直在动 + 镜头交界自动转场 + 每个镜头慢推；false = 和 v1.2 一样（写在 fxBefore / fxAfter 里的调用照常生效）
@@ -485,7 +490,7 @@ function drawFrame(t) {
   text(`${TL.shots.length} PARTS`, ART.x1 - 30, 60, fL(28, 400), 'rgba(243,244,248,0.86)', 'right');
   // 右线旁的竖排小字（参考图的插画署名）
   g.save(); g.translate(ART.x1 - 16, ART.y1 - 24); g.rotate(-Math.PI / 2);
-  text('ILLUSTRATION · CANVAS 2D · S35', 0, 0, fL(14, 400), 'rgba(243,244,248,0.55)', 'left'); g.restore();
+  text('ILLUSTRATION · THREE.JS C4D STUDIO · S35', 0, 0, fL(14, 400), 'rgba(243,244,248,0.55)', 'left'); g.restore();
   // 左边缘黑圆页码
   g.fillStyle = C.circle; g.beginPath(); g.arc(0, 560, 54, 0, TAU); g.fill();
   text('AI', 26, 561, fL(20, 700), C.white);
@@ -726,86 +731,226 @@ function drawCutFX(t) {   // 画在场景之后、草丛之前，屏幕坐标；
 }
 const inC3 = (p) => p * p * p;
 
-// ===== 场景：按新分镜重写 =====
-// 下面是能吃任何分镜的通用骨架：插画区（ART）里每个镜头一屏——左上白圆点 + 擦出来的粗黑体标题 + 「PART 0N」细体小字，
-// 中间一排光面胶囊（关键词，卡在 TL.mark(词) 上弹出；「高亮」的词用强调色 A 红 / B 蓝，其余叶绿 / 黄绿 / 银轮流），镜头慢慢推近；
-// 换镜头时上一屏淡出。左栏的章节字母按镜头换（CHAPTERS）。
-// 正式做新内容时，照新分镜把每屏换成真正演内容的立体物件（参考 示例_Token.html：手套、修枝剪、放大镜、AI 芯片、聊天面板、行李箱、打勾球），不要只留胶囊。
-// 注意：drawPanel 等部件引用了 示例_Token.html 场景区里的 WIN / INPUT 常量，要用就把那几个常量一起抄过来。
+// ===== 场景：Three.js C4D 盲盒柔光摄影棚 + 杂志白细线标注（按新分镜重写） =====
 const hasMark = (k) => (typeof TL.has === 'function' ? TL.has(k) : !!(TL.marks && TL.marks[k]));
-const MS = (k, dflt) => (hasMark(k) ? TL.mark(k) : dflt);   // 关键词开始说的时间；没有这个词就用默认值，不抛错
-const ROLE_MAT = { A: MAT.red, B: MAT.blue }, OTHER_MAT = [MAT.leafG, MAT.lime, MAT.silver];
-const inkOn = (m) => { const [r, gg, b] = hx(m.base); return (0.2126 * r + 0.7152 * gg + 0.0722 * b) / 255 < 0.42 ? '#ffffff' : C.ink; };   // 深色块压白字，浅色块压深字
-const KF = fR(56), PILL_H = 104, GAP = 34, MAXW = 1380;
-const SC = TL.shots.map((s, i) => {
-  const kws = (s.keywords || []).filter(Boolean); let k = 0;
-  const items = kws.map((w, j) => {
-    const h = (TL.highlights || []).find((x) => x.text === w), m = h ? (ROLE_MAT[h.role] || MAT.red) : OTHER_MAT[k++ % 3];
-    return { w, m, ink: inkOn(m), t0: MS(w, s.start + 0.4 + 0.45 * j) - 0.05, wd: tw(w, KF) + 76 };
-  });
-  const rows = []; let row = [], rw = 0;
-  for (const it of items) { if (row.length && rw + it.wd + GAP > MAXW) { rows.push(row); row = []; rw = 0; } row.push(it); rw += it.wd + GAP; }
-  if (row.length) rows.push(row);
-  const y0 = CY + 90 - (rows.length - 1) * (PILL_H + 40) / 2;
-  rows.forEach((r, ri) => { const tot = r.reduce((a, it) => a + it.wd, 0) + GAP * (r.length - 1); let x = CX - tot / 2;
-    r.forEach((it) => { it.x = x + it.wd / 2; it.y = y0 + ri * (PILL_H + 40); x += it.wd + GAP; }); });
-  const title = s.title || `PART ${i + 1}`, n = Math.max(1, [...title].length);
-  return { s, i, items, title, tf: fH(Math.min(84, Math.floor(1420 / n))) };
+const MS = (k, dflt) => (hasMark(k) ? TL.mark(k) : dflt);
+
+const glCv = document.getElementById('gl');
+const ART_W = ART.x1 - ART.x0, ART_H = ART.y1 - ART.y0;
+glCv.width = ART_W; glCv.height = ART_H;
+
+const stage3D = Craft3D.createStage(glCv, {
+  studio: 'c4dClay',
+  exposure: 1.0,
+  fov: 35,
+  shadows: true,
+  ambientColor: 0xe8effa,
+  ambientIntensity: 0.36,
+  keyColor: 0xffffff,
+  keyIntensity: 2.25,
+  fillColor: 0x5c82e6,
+  fillIntensity: 0.72,
+  rimColor: 0x7be3c8,
+  rimIntensity: 1.05,
 });
-function drawShot(sc, t) {
-  const { s, i, items, title, tf } = sc, next = SC[i + 1];
-  const out = next ? (FX_DEFAULT && fxCutAt(next.s.start) ? (t >= next.s.start ? 1 : 0) : P(t, next.s.start - 0.05, 0.3)) : 0;   // v1.3：有默认转场就在切点收掉
-  if (out >= 1 || t < s.start - 0.05) return;
-  setCam({ x: CX, y: CY, z: 1 + 0.035 * sine(P(t, s.start, Math.max(0.5, s.end - s.start))) });
-  g.save(); g.globalAlpha = 1 - out;
-  const tx = ART.x0 + 120, ty = ART.y0 + 140;
-  bullet(tx - 40, ty, P(t, s.start, 0.2));
-  wipeText(title, tx, ty, tf, C.white, P(t, s.start + 0.05, 0.5));
-  wipeText(`PART ${String(i + 1).padStart(2, '0')}`, tx, ty + 78, fL(36, 300), C.placeholder, P(t, s.start + 0.2, 0.4));
-  for (const it of items) {
-    const a = popA(t, it.t0), k = popS(t, it.t0); if (a <= 0) continue;
-    g.save(); g.globalAlpha *= a; g.translate(it.x, it.y);
-    if (FX_DEFAULT) { const sw = 动效.sway(t, it.x * 0.01, { dy: 4, deg: 1.2 }), k2 = P(t, it.t0 + 0.4, 0.4); g.translate(0, sw.dy * k2); g.rotate(sw.r * k2); }   // v1.3：弹出来停住后轻轻浮
-    g.scale(k, k);
-    capsule(0, 0, it.wd, PILL_H, it.m);
-    text(it.w, 0, 3, KF, it.ink, 'center');
+const { renderer, scene, camera } = stage3D;
+
+// 炭黑哑光圆盘底座（承接左上柔光投影，压在杂志插画区下半部）
+const clayBase = new THREE.Mesh(
+  new THREE.CylinderGeometry(4.2, 4.35, 0.16, 80),
+  new THREE.MeshStandardMaterial({ color: 0x222328, roughness: 0.78, metalness: 0.15 })
+);
+clayBase.position.y = -1.35;
+clayBase.receiveShadow = true;
+scene.add(clayBase);
+
+const baseRim = new THREE.Mesh(
+  Craft3D.precisionRingGeo(4.05, 4.18, 0.03, 96),
+  Craft3D.Materials.clay(0x569bd0, { roughness: 0.3 })
+);
+baseRim.position.y = -1.26;
+scene.add(baseRim);
+
+const SHOT_GROUPS = TL.shots.map(() => { const grp = new THREE.Group(); scene.add(grp); return grp; });
+function setCam3D(px, py, pz, lx = 0, ly = -0.1, lz = 0) {
+  camera.position.set(px, py, pz);
+  camera.lookAt(lx, ly, lz);
+  camera.updateMatrixWorld();
+}
+
+let _magCallouts = [];
+function magCallout3D(wx, wy, wz, label, sub, progress = 1, opts = {}) {
+  if (progress <= 0.01 || !label) return;
+  _magCallouts.push({ wx, wy, wz, label, sub, p: clamp(progress, 0, 1), opts });
+}
+function flushMagCallouts() {
+  for (const c of _magCallouts) {
+    const pt = Craft3D.projectToHUD(camera, c.wx, c.wy, c.wz, ART_W, ART_H);
+    if (!pt.visible) continue;
+    const ax = clamp(ART.x0 + pt.x, ART.x0 + 90, ART.x1 - 90);
+    const ay = clamp(ART.y0 + pt.y, ART.y0 + 160, ART.y1 - 90);
+    const fMain = fR(38, 700), fSub = fU(24, 400);
+    const w1 = tw(c.label, fMain), w2 = c.sub ? tw(c.sub, fSub) : 0;
+    const shelfW = Math.max(w1, w2) + 36;
+    const side = c.opts.dx !== undefined ? Math.sign(c.opts.dx || 1) : (ax < CX ? -1 : 1);
+    const dx = c.opts.dx ?? (side * 135), dy = c.opts.dy ?? -68;
+    const minKx = side > 0 ? ART.x0 + 60 : ART.x0 + shelfW + 60;
+    const maxKx = side > 0 ? ART.x1 - shelfW - 60 : ART.x1 - 60;
+    const kx = clamp(ax + dx, minKx, maxKx), ky = clamp(ay + dy, ART.y0 + 185, ART.y1 - 105);
+    const ex = kx + side * shelfW;
+
+    const q = outC(clamp(c.p * 1.4, 0, 1));
+    g.save();
+    g.strokeStyle = 'rgba(243,244,248,0.86)'; g.lineWidth = 2;
+    const len = Math.hypot(kx - ax, ky - ay) + Math.abs(ex - kx);
+    g.setLineDash([len * q, len + 20]);
+    g.beginPath(); g.moveTo(ax, ay); g.lineTo(kx, ky); g.lineTo(ex, ky); g.stroke();
+    g.setLineDash([]);
+    g.fillStyle = C.white; g.beginPath(); g.arc(ax, ay, 5.5, 0, TAU); g.fill();
+
+    const tp = clamp((c.p - 0.15) / 0.85, 0, 1);
+    if (tp > 0) {
+      g.globalAlpha = tp;
+      const tx = side > 0 ? kx + 12 : kx - 12, align = side > 0 ? 'left' : 'right';
+      if (c.opts.pill) {
+        const m = c.opts.pill === 'red' ? MAT.red : c.opts.pill === 'blue' ? MAT.blue : MAT.green;
+        const pw = w1 + 36, ph = 54, px = side > 0 ? tx - 8 : tx - pw + 8, py = ky - ph - 8;
+        pill(px, py, pw, ph, m, 27, { shadow: true });
+        text(c.label, px + pw / 2, py + ph / 2 + 2, fMain, c.opts.pill === 'blue' ? C.ink : '#ffffff');
+      } else {
+        g.shadowColor = 'rgba(0,0,0,0.65)'; g.shadowBlur = 10;
+        text(c.label, tx, ky - 26, fMain, C.white, align);
+        g.shadowBlur = 0;
+      }
+      if (c.sub) text(c.sub, tx, ky + 18, fSub, C.placeholder, align);
+    }
     g.restore();
   }
-  g.restore();
-  g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
+  _magCallouts = [];
 }
-function initScenes() { /* 新场景要预画的贴图（makeSprite）放这里，参考 示例_Token.html 的 initScenes */ }
-function drawScenes(t) { for (const sc of SC) drawShot(sc, t); }   // ← 场景入口（v1.1 提醒）：写了自己的场景，就把这里换成自己的绘制函数，骨架的 SC / drawShot 删掉
+
+let _built3D = false;
+const CLAY_HEX = [0x2fa35c, 0x8fcd55, 0xb8cde2, 0x49b8af];
+function buildScene3D() {
+  TL.shots.forEach((s, i) => {
+    const grp = SHOT_GROUPS[i];
+    // 中央 C4D 立体双螺旋链或精密银环核
+    const centerObj = i % 2 === 0
+      ? Craft3D.createHelixChain(1.5, 0.78, 2.7, 0x2fa35c, 0x569bd0)
+      : (() => {
+          const g0 = new THREE.Group();
+          const sp = new THREE.Mesh(new THREE.SphereGeometry(0.75, 36, 36), Craft3D.Materials.clay(0x49b8af, { clearcoat: 0.9 }));
+          sp.castShadow = true; g0.add(sp);
+          const r1 = new THREE.Mesh(Craft3D.precisionRingGeo(1.05, 1.2, 0.09, 72), Craft3D.Materials.clay(0xe4ebf3));
+          r1.rotation.x = 0.9; r1.castShadow = true; g0.add(r1);
+          const r2 = new THREE.Mesh(Craft3D.precisionRingGeo(1.28, 1.4, 0.07, 72), Craft3D.Materials.clay(0x8fcd55));
+          r2.rotation.y = 0.7; r2.castShadow = true; g0.add(r2);
+          g0.userData = { r1, r2 };
+          return g0;
+        })();
+    centerObj.position.y = 0.05;
+    grp.add(centerObj);
+
+    const kws = (s.keywords || []).filter(Boolean);
+    const pills = kws.map((w, j) => {
+      const h = (TL.highlights || []).find((x) => x.text === w);
+      const role = h ? (h.role === 'B' ? 'blue' : 'red') : null;
+      const col = role === 'red' ? 0xd41928 : role === 'blue' ? 0x569bd0 : CLAY_HEX[j % CLAY_HEX.length];
+      const a = (j / Math.max(1, kws.length)) * TAU - 0.6;
+      const rx = 2.55, rz = 1.85;
+      const tx = Math.cos(a) * rx, tz = Math.sin(a) * rz, ty = -0.55 + (j % 2) * 0.65;
+      const cap = Craft3D.createCapsulePill(1.42, 0.34, col);
+      cap.position.set(tx, ty, tz);
+      grp.add(cap);
+
+      const pipe = Craft3D.createEnergyStream([tx, ty, tz], [tx * 0.45, ty + 0.65, tz * 0.45], [0, 0.05, 0], {
+        color: role === 'red' ? 0xff7a6b : 0x8be8a8, radius: 0.032, pulses: 2, intensity: 1.4,
+      });
+      grp.add(pipe);
+      return { w, role, cap, pipe, tx, ty, tz, a, t0: MS(w, s.start + 0.3 + j * 0.42) };
+    });
+    grp.userData = { centerObj, pills };
+  });
+}
+
+function updateShot3D(shIdx, s, t, u) {
+  const { centerObj, pills } = SHOT_GROUPS[shIdx].userData;
+  const camA = -0.35 + u * 0.68 + shIdx * 0.4;
+  setCam3D(Math.sin(camA) * 9.4, lerp(2.5, 1.95, sine(u)), Math.cos(camA) * 9.4, 0, -0.05, 0);
+
+  centerObj.rotation.y = t * 0.65;
+  if (centerObj.userData.r1) {
+    centerObj.userData.r1.rotation.z = t * 0.8;
+    centerObj.userData.r2.rotation.x = -t * 0.6;
+  }
+  pills.forEach((p, j) => {
+    const k = outBack(P(t, p.t0 - 0.06, 0.4));
+    p.cap.scale.setScalar(Math.max(0.001, k));
+    p.cap.position.y = p.ty + Math.sin(t * 2.1 + j) * 0.08;
+    p.cap.rotation.y = -p.a + Math.sin(t * 0.9 + j) * 0.12;
+    p.pipe.userData.update(t, P(t, p.t0 + 0.1, 0.4), 0.7, j * 0.3);
+    magCallout3D(p.tx, p.ty + 0.32, p.tz, p.w, '', P(t, p.t0, 0.36), {
+      pill: p.role,
+      dy: -62 - (j % 2) * 34,
+    });
+  });
+}
+
+function initScenes() {
+  if (!_built3D) { buildScene3D(); _built3D = true; }
+}
+
+function drawScenes(t) {
+  if (!_built3D) initScenes();
+  _magCallouts = [];
+  let idx = 0;
+  for (let i = 0; i < TL.shots.length; i++) if (t >= TL.shots[i].start) idx = i;
+  const s = TL.shots[idx];
+  const dur = Math.max(0.4, (TL.shots[idx + 1] ? TL.shots[idx + 1].start : TL.duration) - s.start);
+  const u = P(t, s.start, dur);
+
+  SHOT_GROUPS.forEach((grp, i) => { grp.visible = (i === idx); });
+  updateShot3D(idx, s, t, u);
+  renderer.render(scene, camera);
+
+  // 将 3D 摄影棚画面严格裁在杂志内页细线框 ART 内，并绘制杂志左上擦出标题
+  g.save();
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.beginPath(); g.rect(ART.x0, ART.y0, ART_W, ART_H); g.clip();
+  g.drawImage(glCv, ART.x0, ART.y0, ART_W, ART_H);
+  flushMagCallouts();
+
+  const title = s.title || `PART ${idx + 1}`, n = Math.max(1, [...title].length);
+  const tf = fH(Math.min(68, Math.floor(1280 / n)));
+  const tx = ART.x0 + 92, ty = ART.y0 + 78;
+  bullet(tx - 32, ty, P(t, s.start, 0.2));
+  wipeText(title, tx, ty, tf, C.white, P(t, s.start + 0.05, 0.45));
+  g.restore();
+}
 
 // ====================== 一帧 ======================
 let BG, NOISE;
-// ---------- 动效入口（v1.2）：转场、次要动作写在这两个函数里，调 动效部件.js（用法见那个文件开头、knowledge/动效和画面变化.md 第八节）；空着画面不变 ----------
-function fxBefore(t) { }   // 画场景之前、镜头已设好：推移（动效.push + 动效.shift）、慢推、震屏、整体抖
-function fxAfter(t) { }    // 场景画完、页眉字幕之前，已是屏幕坐标：故障、擦除、翻页、纸片盖屏、粒子、泛光
+function fxBefore(t) { }
+function fxAfter(t) { }
 function render(t) {
   g = MAIN;
-  // v1.3：每帧开头把画布状态全清掉。lineCap、lineJoin、虚线、阴影这些不清会从上一帧带过来，先 seek 后面再 seek 前面画出来就不一样
   if (typeof g.reset === 'function') g.reset();
   g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = 'source-over'; g.filter = 'none';
   g.lineCap = 'butt'; g.lineJoin = 'miter'; g.setLineDash([]); g.lineDashOffset = 0; g.shadowColor = 'rgba(0,0,0,0)'; g.shadowBlur = 0; g.imageSmoothingEnabled = true;
   SCENE_BASE = new DOMMatrix();
   g.drawImage(BG, 0, 0);
-  if (FX_DEFAULT) drawBackFX(t);   // 默认动效：背景 4 层
+  if (FX_DEFAULT) drawBackFX(t);
   drawFrame(t);
-  g.save(); if (NOSUB) { g.beginPath(); g.rect(0, 0, W, ART.y1); g.clip(); }   // v1.3：不画字幕带时（--no-subtitle），画面里的东西裁在字幕带上沿以上；画字幕带时不用裁（带子盖着，裁了草叶的抗锯齿会和 v1.2 差一点）
-  if (FX_DEFAULT) fxCamDefault(t);   // 默认动效：每个镜头慢推
-  fxBefore(t);   // 动效入口（v1.2）
-  SCENE_BASE = g.getTransform();   // setCam 会乘上它
+  g.save(); if (NOSUB) { g.beginPath(); g.rect(0, 0, W, ART.y1); g.clip(); }
   drawScenes(t);
   g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1;
-  if (FX_DEFAULT) drawCutFX(t);   // 默认动效：镜头交界的转场
+  if (FX_DEFAULT) drawCutFX(t);
   drawPlants(t);
   g.restore();
-  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); fxAfter(t); g.restore();   // 动效入口（v1.2）
-  if (!NOSUB) { g.fillStyle = C.band; g.fillRect(0, ART.y1, W, H - ART.y1); }   // 字幕带：--no-subtitle（?nosub=1）时整块不画
-  g.strokeStyle = 'rgba(243,244,248,0.5)'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(COL.a, ART.y1); g.lineTo(ART.x1, ART.y1); g.stroke();   // 杂志框的下边线
-  // 全画面颗粒（2 像素一粒，叠加模式），字幕字在颗粒之上保持干净
-  g.globalCompositeOperation = 'overlay'; g.globalAlpha = 0.3; g.imageSmoothingEnabled = false;
+  g.save(); g.setTransform(1, 0, 0, 1, 0, 0); fxAfter(t); g.restore();
+  if (!NOSUB) { g.fillStyle = C.band; g.fillRect(0, ART.y1, W, H - ART.y1); }
+  g.strokeStyle = 'rgba(243,244,248,0.5)'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(COL.a, ART.y1); g.lineTo(ART.x1, ART.y1); g.stroke();
+  g.globalCompositeOperation = 'overlay'; g.globalAlpha = 0.26; g.imageSmoothingEnabled = false;
   g.drawImage(NOISE, 0, 0, W, H);
   g.imageSmoothingEnabled = true; g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
   drawSubtitle(t);
@@ -816,7 +961,7 @@ let READY = false;
 window.seek = (t) => { if (READY) render(t); };
 (async () => {
   const specs = [fH(80), fR(60), fR(40, 400), fU(40, 300), fU(40, 400), fU(64, 600), fL(100, 300), fL(100, 700)];
-  try { await Promise.all(specs.map((f) => document.fonts.load(f, (TL.text || '').slice(0, 80) + 'AIPART'))); } catch (e) { /* 字体都是系统字体，加载失败也能画 */ }
+  try { await Promise.all(specs.map((f) => document.fonts.load(f, (TL.text || '').slice(0, 80) + 'AIPART'))); } catch (e) {}
   BG = makeBackground(1760, 600, 640);
   NOISE = makeNoise(960, 540, 11, 64);
   if (FX_DEFAULT) initDefaultFX();

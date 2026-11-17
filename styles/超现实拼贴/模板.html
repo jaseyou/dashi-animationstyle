@@ -20,9 +20,14 @@
 </style>
 </head>
 <body>
-<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<div id="stage">
+  <canvas id="gl" width="1920" height="1080" style="display:none"></canvas>
+  <canvas id="c" width="1920" height="1080"></canvas>
+</div>
 <script src="timeline.js"></script>
 <script src="动效部件.js"></script>
+<script src="three.min.js"></script>
+<script src="three_craft.js"></script>
 <script>
 'use strict';
 // ===== 底座：换内容时不用改 =====
@@ -586,52 +591,189 @@ function drawSubtitle(t) {
   g.restore();
 }
 
-// ===== 场景：按新分镜重写 =====
-// 下面是能吃任何分镜的通用骨架：每个镜头一张「海报」——左上特粗衬线大标题（第一个字桃橙渐变）+ 橙色干笔刷，
-// 下面一排撕边纸条（关键词，卡在 TL.mark(词) 上「拍」上来，纸胶带贴住；「高亮」的词用强调色 A 红 / B 蓝纸条白字），
-// 手绘箭头从标题指向纸条，右下手写批注「#N」。换镜头时上一张淡出。
-// 正式做新内容时先想一个超现实比喻（Token 例子：AI = 开顶石头人头、Token = 头里的骨牌、海量数据 = 从头顶喷出的纸条），
-// 再用底座里的部件演（drawHead / drawInterior 人头、domino 骨牌、scissors 剪刀、magnifier 放大镜、traveler 背包小人、inkLoop 墨线圈），不要只留纸条。
+// ===== 场景：Three.js 斜阳长硬影建筑阶梯 + 真 3D 连锁倾倒多米诺骨牌海报（按新分镜重写） =====
 const hasMark = (k) => (typeof TL.has === 'function' ? TL.has(k) : !!(TL.marks && TL.marks[k]));
-const MS = (k, dflt) => (hasMark(k) ? TL.mark(k) : dflt);   // 关键词开始说的时间；没有这个词就用默认值，不抛错
-const SLF = fSlip(52), SLH = 88, SLG = 30;
-const SECS = TL.shots.map((s, i) => {
-  const kws = (s.keywords || []).filter(Boolean);
-  const items = kws.map((w, j) => { const h = (TL.highlights || []).find((x) => x.text === w);
-    return { w, col: h ? (h.role === 'B' ? C.blue : C.red) : (j % 2 ? C.slip : C.strip), ink: h ? '#ffffff' : C.ink, t0: MS(w, s.start + 0.4 + 0.45 * j) - 0.05,
-      wd: tw(w, SLF) + 64, rot: ((i * 7 + j * 3) % 5 - 2) * 0.012, seed: 500 + i * 37 + j * 11 }; });
-  const rows = []; let row = [], rw = 0;
-  for (const it of items) { if (row.length && rw + it.wd + SLG > 1400) { rows.push(row); row = []; rw = 0; } row.push(it); rw += it.wd + SLG; }
-  if (row.length) rows.push(row);
-  const y0 = 600 - (rows.length - 1) * (SLH + 34) / 2;
-  rows.forEach((r, ri) => { let x = 300; r.forEach((it) => { it.x = x + it.wd / 2; it.y = y0 + ri * (SLH + 34); x += it.wd + SLG; }); });
-  const title = s.title || `第 ${i + 1} 张`, n = Math.max(1, [...title].length), size = Math.min(110, Math.floor(1450 / n));
-  return { s, i, items, title, size };
+const MS = (k, dflt) => (hasMark(k) ? TL.mark(k) : dflt);
+
+const glCv = document.getElementById('gl');
+const stage3D = Craft3D.createStage(glCv, {
+  studio: 'warmDaylight',
+  exposure: 0.96,
+  fov: 33,
+  shadows: true,
+  ambientColor: 0xf4eee0,
+  ambientIntensity: 0.34,
+  keyColor: 0xfff2d6,
+  keyIntensity: 2.55,
+  fillColor: 0x43a9ad,
+  fillIntensity: 0.38,
+  rimColor: 0xf2ab11,
+  rimIntensity: 0.65,
 });
-function drawPoster(sc, t) {
-  const { s, i, items, title, size } = sc, next = SECS[i + 1];
-  const out = next ? (FX_DEFAULT ? (t >= next.s.start ? 1 : 0) : P(t, next.s.start - 0.05, 0.25)) : 0;   // v1.3：开了默认转场就不淡出，到点交给转场
-  if (out >= 1 || t < s.start - (FX_DEFAULT ? 0 : 0.05)) return;
-  g.save(); g.globalAlpha *= 1 - out;
-  const tx = 240, ty = 300;
-  const t1 = s.start + (i ? (FX_DEFAULT ? 0.3 : 0.22) : 0);   // 上一张淡完（开了默认转场：转场走开）再拍新标题，免得两个标题叠在一起
-  paste(t, t1, tx + 400, ty, () => headline(title, tx, ty, size, [0, 1]));
-  brush(tx - 10, ty + size * 0.62, Math.min(900, tw(title, fHead(size)) * 0.6), 34, outC(P(t, t1 + 0.25, 0.4)), i % 3);
-  const first = items[0];
-  if (first) handArrow(tx + 60, ty + size * 0.75, tx + 20, first.y - 60, first.x - first.wd / 2 + 30, first.y - SLH / 2 - 12, outC(P(t, first.t0 - 0.25, 0.3)), { seed: i + 1 });
-  for (const it of items) {
-    const sw = FX_DEFAULT ? 动效.sway(t, it.seed, { dy: 2, deg: 0.6, breath: 0 }) : { dy: 0, r: 0 };   // v1.3：落定后轻轻摇
-    paste(t, it.t0, it.x, it.y, () => {
-      g.save(); g.translate(it.x, it.y + sw.dy); g.rotate(it.rot + sw.r);
-      const pts = tornRect(it.wd, SLH, it.seed, { edge: 1.2, endL: 4, endR: 4 });
-      g.fillStyle = 'rgba(40,32,18,0.22)'; poly(pts, 5, 7); g.fill();
-      g.fillStyle = it.col; poly(pts); g.fill();
-      text(it.w, 0, 4, SLF, it.ink, 'center');
-      g.restore();
-      tape(it.x - it.wd / 2 + 18, it.y - SLH / 2 + 4 + sw.dy, 70, 22, -0.5, 0.9);
-    }, 0.28);
+const { renderer, scene, camera, lights } = stage3D;
+// 低角度斜阳平行光：在米灰斑驳海报纸上拉出极具超现实雕塑感的戏剧性长硬影！
+lights.key.position.set(-7.5, 5.2, 6.2);
+lights.key.shadow.radius = 1.4; // 硬边建筑长影
+
+const posterShadowFloor = new THREE.Mesh(
+  new THREE.PlaneGeometry(36, 24),
+  new THREE.ShadowMaterial({ color: 0x1b201e, opacity: 0.32 })
+);
+posterShadowFloor.rotation.x = -Math.PI / 2;
+posterShadowFloor.position.y = -1.45;
+posterShadowFloor.receiveShadow = true;
+scene.add(posterShadowFloor);
+
+const DOM_PALETTE = [
+  { hex: 0xf0a91c, pip: 0xfbf6e9 },
+  { hex: 0x7d9a58, pip: 0xf4f1e6 },
+  { hex: 0x2b2e2a, pip: 0xf3eee2 },
+  { hex: 0xe3901e, pip: 0xfbf6e9 },
+  { hex: 0x2f6b48, pip: 0xf4f1e6 },
+];
+
+const POSTER_GROUPS = [];
+const SLF = fSlip(40);
+const SECS = TL.shots.map((s, i) => {
+  const grp = new THREE.Group();
+  grp.position.set(1.35, 0, 0); // 放在海报右侧黄金视觉区，左侧留给特粗衬线大标题与干笔刷
+  scene.add(grp);
+  POSTER_GROUPS.push(grp);
+
+  // 超现实石雕阶梯台座
+  const stepBase = new THREE.Group();
+  for (let st = 0; st < 3; st++) {
+    const slab = new THREE.Mesh(
+      Craft3D.roundedBoxGeo(5.2 - st * 0.55, 0.24, 2.5 - st * 0.32, 0.04, 3),
+      Craft3D.Materials.clay(st === 2 ? 0xd6ccb8 : 0xc6bba4, { roughness: 0.62, clearcoat: 0.1 })
+    );
+    slab.position.set(0, -1.32 + st * 0.24, 0);
+    slab.castShadow = slab.receiveShadow = true;
+    stepBase.add(slab);
   }
-  handText(`#${i + 1}`, 1560, 760, 56, P(t, s.start + 0.5, 0.4), { col: C.orange });
+  grp.add(stepBase);
+
+  // 后方纪念碑感炭黑圆拱环与悬浮太阳球（置于 z = -1.25 背景景深层，绝不穿模遮挡前景骨牌）
+  const arch = new THREE.Mesh(
+    Craft3D.precisionRingGeo(1.85, 2.15, 0.22, 72),
+    Craft3D.Materials.clay(0x22282a, { roughness: 0.52 })
+  );
+  arch.position.set(0.35, 0.48, -1.25);
+  arch.rotation.x = Math.PI * 0.48; // 立成神圣圆拱门框住骨牌阵！
+  arch.castShadow = true;
+  grp.add(arch);
+
+  const sunSphere = new THREE.Mesh(
+    new THREE.SphereGeometry(0.44, 32, 32),
+    Craft3D.Materials.clay(0xf2ab11, { roughness: 0.28 })
+  );
+  sunSphere.position.set(0.35, 1.45, -1.25);
+  sunSphere.castShadow = true;
+  grp.add(sunSphere);
+
+  // 站立在石阶顶面的一排真 3D 多米诺骨牌（按关键词连锁倾倒！）
+  const kws = (s.keywords || []).filter(Boolean);
+  const nDom = Math.max(4, kws.length + 2);
+  const dominoes = [];
+  for (let d = 0; d < nDom; d++) {
+    const kw = kws[d] || '';
+    const hl = kw ? (TL.highlights || []).find((x) => x.text === kw) : null;
+    const pal = hl
+      ? (hl.role === 'B' ? { hex: 0x3aa6c0, pip: 0x0b1615 } : { hex: 0xa02503, pip: 0xfbf6e9 })
+      : DOM_PALETTE[(i + d) % DOM_PALETTE.length];
+    const dom = Craft3D.createDomino3D(pal.hex, pal.pip, ((d + i) % 6) + 1, ((d * 2 + 1) % 6) + 1);
+    const x = (d - (nDom - 1) / 2) * 0.78;
+    dom.position.set(x, -0.72, 0.15);
+    dom.rotation.y = 0.22;
+    grp.add(dom);
+    const t0 = kw ? MS(kw, s.start + 0.45 + d * 0.38) : s.start + 0.55 + d * 0.32;
+    dominoes.push({
+      dom, kw, x, t0,
+      col: hl ? (hl.role === 'B' ? C.blue : C.red) : C.slip,
+      ink: hl ? (hl.role === 'B' ? C.ink : '#ffffff') : C.ink,
+      wd: kw ? tw(kw, SLF) + 48 : 0,
+      seed: 500 + i * 37 + d * 11,
+    });
+  }
+
+  const title = s.title || `第 ${i + 1} 幕`, n = Math.max(1, [...title].length);
+  const size = Math.min(86, Math.floor(820 / Math.min(n, 9)));
+  grp.userData = { arch, sunSphere, dominoes };
+  return { s, i, title, size, dominoes };
+});
+
+function drawPoster(sc, t) {
+  const { s, i, title, size, dominoes } = sc, next = SECS[i + 1];
+  const out = next ? (FX_DEFAULT ? (t >= next.s.start ? 1 : 0) : P(t, next.s.start - 0.05, 0.25)) : 0;
+  if (out >= 1 || t < s.start - (FX_DEFAULT ? 0 : 0.05)) return;
+
+  const dur = Math.max(0.4, (next ? next.s.start : TL.duration) - s.start);
+  const u = P(t, s.start, dur);
+
+  POSTER_GROUPS.forEach((grp, idx) => { grp.visible = (idx === i); });
+  const { arch, sunSphere } = POSTER_GROUPS[i].userData;
+
+  const camA = -0.26 + u * 0.52;
+  camera.position.set(0.85 + Math.sin(camA) * 9.8, lerp(2.25, 1.75, sine(u)), Math.cos(camA) * 9.8);
+  camera.lookAt(0.85, -0.2, 0);
+  camera.updateMatrixWorld();
+
+  arch.rotation.y = Math.sin(t * 0.45) * 0.18;
+  sunSphere.position.y = 1.45 + Math.sin(t * 2.0) * 0.12;
+
+  // 多米诺连锁拍上与倾倒动画
+  dominoes.forEach((dm, d) => {
+    const enter = outBack(P(t, s.start + 0.12 + d * 0.09, 0.36));
+    dm.dom.scale.setScalar(Math.max(0.001, enter));
+    const tipP = outC(P(t, dm.t0, 0.38));
+    const maxTilt = d < dominoes.length - 1 ? -0.58 : -1.12;
+    dm.dom.rotation.z = tipP * maxTilt;
+  });
+
+  renderer.render(scene, camera);
+
+  g.save();
+  g.globalAlpha *= 1 - out;
+
+  // 1) 绘制右侧 3D 超现实石阶与多米诺长影舞台
+  g.save();
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.drawImage(glCv, 0, 0, W, H);
+  g.restore();
+
+  // 2) 左侧海报特粗高反差衬线大标题（首字桃橙渐变 [0, 1]，x=200 留足慢推安全区）+ 飞白干笔刷
+  const shortT = (String(title).split(/[：:，,·・]/)[0] || title).trim();
+  const hSize = Math.min(68, Math.floor(460 / Math.max(1, [...shortT].length)));
+  const hW = tw(shortT, fHead(hSize));
+  const tx = 196, ty = 264;
+  const t1 = s.start + (i ? (FX_DEFAULT ? 0.28 : 0.2) : 0);
+  paste(t, t1, tx + hW / 2, ty, () => headline(shortT, tx, ty, hSize, [0, 1]));
+  brush(tx - 8, ty + hSize * 0.62, Math.min(500, hW * 0.95), 30, outC(P(t, t1 + 0.22, 0.38)), i % 3);
+
+  // 3) 撕边纸胶带关键词标签错落排布在骨牌上方 + 手绘箭头从标题连向第一枚骨牌
+  const kwDoms = dominoes.filter((dm) => dm.kw);
+  kwDoms.forEach((dm, kIdx) => {
+    const pr = Craft3D.projectToHUD(camera, 1.35 + dm.x, 1.05, 0.15, W, H);
+    if (!pr.visible) return;
+    const slotX = 800 + kIdx * Math.min(340, Math.floor(840 / Math.max(1, kwDoms.length)));
+    const lx = clamp(lerp(pr.x, slotX, 0.55), 740 + dm.wd / 2, W - dm.wd / 2 - 110);
+    const ly = 220 + (kIdx % 2) * 86;
+    if (kIdx === 0) {
+      handArrow(tx + hW * 0.65, ty + hSize * 0.85, tx + hW + 110, ly + 95, lx - dm.wd / 2 - 14, ly + 8, outC(P(t, dm.t0 - 0.2, 0.35)), { seed: i + 1 });
+    }
+    const sw = FX_DEFAULT ? 动效.sway(t, dm.seed, { dy: 2, deg: 0.6, breath: 0 }) : { dy: 0, r: 0 };
+    paste(t, dm.t0 - 0.05, lx, ly, () => {
+      g.save(); g.translate(lx, ly + sw.dy); g.rotate(sw.r);
+      const pts = tornRect(dm.wd, 68, dm.seed, { edge: 1.1, endL: 4, endR: 4 });
+      g.fillStyle = 'rgba(40,32,18,0.22)'; poly(pts, 4, 6); g.fill();
+      g.fillStyle = dm.col; poly(pts); g.fill();
+      text(dm.kw, 0, 3, SLF, dm.ink, 'center');
+      g.restore();
+      tape(lx - dm.wd / 2 + 16, ly - 32 + sw.dy, 58, 19, -0.45, 0.9);
+    }, 0.26);
+  });
+
+  handText(`#${i + 1}`, 182, 790, 54, P(t, s.start + 0.45, 0.4), { col: C.orange });
   g.restore();
 }
 

@@ -244,9 +244,16 @@ async function openPage(cdp, htmlPath, query = '') {
   const inSkill = path.resolve(htmlPath).startsWith(SKILL_DIR + path.sep);
   if (!inSkill) try {
     const fx = path.join(path.dirname(path.resolve(htmlPath)), '动效部件.js');
-    if (!fs.existsSync(fx) && fs.readFileSync(htmlPath, 'utf8').includes('src="动效部件.js"')) {
+    const htmlSrc = fs.readFileSync(htmlPath, 'utf8');
+    if (!fs.existsSync(fx) && htmlSrc.includes('src="动效部件.js"')) {
       fs.copyFileSync(fileURLToPath(new URL('./动效部件.js', import.meta.url)), fx);
       console.log(`  已把 动效部件.js 复制到页面旁边：${fx}`);
+    }
+    const threeDst = path.join(path.dirname(path.resolve(htmlPath)), 'three.min.js');
+    const threeSrc = fileURLToPath(new URL('./vendor/three.min.js', import.meta.url));
+    if (!fs.existsSync(threeDst) && htmlSrc.includes('src="three.min.js"') && fs.existsSync(threeSrc)) {
+      fs.copyFileSync(threeSrc, threeDst);
+      console.log(`  已把 three.min.js 复制到页面旁边：${threeDst}`);
     }
   } catch { /* 复制不了也照常打开：页面里没调用 动效 就不影响 */ }
   const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
@@ -349,6 +356,8 @@ async function main() {
   } else if (opts.config) die(`找不到作品配置：${cfgPath}`);
   const cfgDir = path.dirname(cfgPath);
   const fromCfg = (k) => (cfg[k] ? path.resolve(cfgDir, cfg[k]) : null);
+  const htmlContent = fs.readFileSync(html, 'utf8');
+  if (cfg.gpu || htmlContent.includes('three.min.js') || htmlContent.includes('WebGLRenderer')) opts.gpu = true;
   if (opts.stills && (opts.scan || opts.checkMarks)) die('--stills 和 --scan / --check-marks 分两次跑');
   if (opts.determinism && (opts.stills || opts.scan || opts.checkMarks)) die('--check-determinism 单独跑');
   const mode = opts.determinism ? 'determinism' : opts.stills ? 'stills' : (opts.scan || opts.checkMarks) ? 'check' : opts.preview ? 'preview' : 'final';

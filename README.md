@@ -63,6 +63,7 @@ git clone https://github.com/chuspeeism/dashi-animationstyle.git ~/.claude/skill
 | v1.1 | 按一次观众实测修订：字幕识别改正、裁口播、扫片和卡点检查 |
 | v1.2 | 第二、三种用法；风格词典、通用规则；动效知识、共用转场部件、丰富度检查 |
 | v1.3 | 7 套例子按动效规则重做；模板自带背景动效和转场；去掉字幕时字幕底带一起去掉；整理成公开版 |
+| v2.0-threejs | 全系升级为 8 套（含霓虹赛博）三层电影级 Three.js + Canvas 摄影棚架构（three_craft.js：PMREM 柔光棚、45° 倒角构件、三平面动态楔形剖面切割、GLSL 脉冲流光管、视锥无损特写、双向松弛防撞引线）；新增纯 Python 标准库动作音效与人声侧链闪避母带引擎（音效合成.py，借鉴 whaleyxbt/claude-motion MIT）及一键六道门禁验收 |
 
 ## 许可
 

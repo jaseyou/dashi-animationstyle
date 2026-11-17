@@ -20,9 +20,14 @@
 </style>
 </head>
 <body>
-<div id="stage"><canvas id="c" width="1920" height="1080"></canvas></div>
+<div id="stage">
+  <canvas id="gl" width="1120" height="540" style="display:none"></canvas>
+  <canvas id="c" width="1920" height="1080"></canvas>
+</div>
 <script src="timeline.js"></script>
 <script src="动效部件.js"></script>
+<script src="three.min.js"></script>
+<script src="three_craft.js"></script>
 <script>
 'use strict';
 // ===== 底座：换内容时不用改 =====
@@ -157,6 +162,16 @@ class Sk {
   dash(x0, y0, x1, y1, o = {}) {
     const L = Math.hypot(x1 - x0, y1 - y0), d = o.d ?? 24, gp = o.gp ?? 9; let s = rr(0, 5);
     while (s < L - 4) { const e = Math.min(L, s + d * rr(0.7, 1.3)); this.line(lerp(x0, x1, s / L), lerp(y0, y1, s / L), lerp(x0, x1, e / L), lerp(y0, y1, e / L), { ...o, over: 0, amp: 0.5 }); s = e + gp * rr(0.6, 1.4); }
+    return this;
+  }
+  // 带顶部居中文字留空的虚线框（防止顶边虚线穿过居中标题字）
+  titledDashRect(x, y, w, h, gapHalfW = 140, o = {}) {
+    const cx = x + w / 2, gl = Math.max(x + 16, cx - gapHalfW), gr = Math.min(x + w - 16, cx + gapHalfW);
+    if (gl > x + 16) this.dash(x, y, gl, y, o);
+    if (x + w - gr > 16) this.dash(gr, y, x + w, y, o);
+    this.dash(x + w, y, x + w, y + h, o);
+    this.dash(x + w, y + h, x, y + h, o);
+    this.dash(x, y + h, x, y, o);
     return this;
   }
   // 波浪占位线 ~~~~
@@ -561,7 +576,8 @@ FX_CUTS = TL.shots.slice(1).map((s, k) => {
 });
 FX_CUTS.forEach((cu, k) => {
   const p1 = k > 0 ? FX_CUTS[k - 1].kind : null, p2 = k > 1 ? FX_CUTS[k - 2].kind : null;
-  if (!cu.big && (cu.kind === 'curl' || cu.kind === 'erase')) cu.kind = p1 === 'zoom' && p2 === 'zoom' ? 'scroll' : 'zoom';
+  const unsafe = (TL.unsafeCoverCuts || []).includes(k);
+  if ((!cu.big || unsafe) && (cu.kind === 'curl' || cu.kind === 'erase')) cu.kind = p1 === 'zoom' && p2 === 'zoom' ? 'scroll' : 'zoom';
   if (cu.kind === p1 && cu.kind === p2) cu.kind = cu.kind === 'scroll' ? 'zoom' : 'scroll';
 });
 fxPlan();
@@ -736,92 +752,193 @@ const MS = (k, dflt) => (hasMark(k) ? TL.mark(k) : dflt);
 function markTimes(name) { const m = TL.marks[name]; if (!m) throw new Error('TL.marks 里没有 ' + name); return TL.chars.filter((c) => c.start >= m.start - 1e-6 && c.start < m.end - 1e-6).map((c) => c.start); }
 function charTimes(cue, idx) { const cs = TL.chars.filter((c) => c.cue === cue); return idx.map((i) => (cs[i] ? cs[i].start : TL.duration)); }
 
-// ===== 场景：按新分镜重写 =====
-// 下面是能吃任何分镜的通用骨架：整片一张竖长笔记纸，每个镜头一段（世界 y 往下接着排，每段 SEC_H 高），换镜头时镜头往下「读」；
-// 每段左右交错（参考图的版式）：一个手绘框（逐笔描出）+ 旁边一张信息小卡（文字页 / 图片框 / 声波轮换，用的是上面「常用部件」）+ 引线；
-// 框上面 @编号标签 + 手写镜头标题（逐字写出）+ 橙色波浪下划线；框里是关键词——「高亮」的两个词用强调色 A/B 实心色块白字，
-// 其余手写 + 波浪下划线，都卡在 TL.mark(词) 上写出来。
-// v1.3：关键词下面再一行行写出灰色波浪占位线（参考图里「没写完的字」，均匀摊在整个镜头里）；小卡轻轻摇；
-// 关键词写完、离下一个词还有 2 秒以上时，镜头推近这个词再拉开（推近某处再拉开）。
-// FX_DEFAULT = false 时骨架回到 v1.2 的样子（框居中、没有小卡、占位线和推近）。
-// 正式做新内容时，照新分镜把每段换成真正演内容的线稿（参考 示例_Token.html：笔记本电脑聊天框、机器人 + 剪刀、厚笔记本翻页 + 放大镜、颗粒章），不要只留文字。
+// ===== 场景：达芬奇钢笔蓝图正交 3D 爆炸拆解图 + 手绘笔记版式（按新分镜重写） =====
 const roleOf = (w) => { const h = (TL.highlights || []).find((x) => x.text === w); return h ? h.role : null; };
-const SEC_H = 1000, BOX = { w: FX_DEFAULT ? 1080 : 1320, y: 250, h: 520 }, CARDS = [cardText, cardImg, cardWave];
-const SECS = TL.shots.map((s, i) => {
-  const y0 = i * SEC_H, side = i % 2 ? 1 : -1;                     // 左右交错：-1 框在左、小卡在右；1 反过来
-  const bx = !FX_DEFAULT ? 300 : side < 0 ? 170 : 670, by = y0 + BOX.y, bcx = bx + BOX.w / 2;
-  const title = s.title || `镜头 ${i + 1}`;
-  const tSize = Math.min(78, Math.floor((FX_DEFAULT ? 1000 : 1300) / Math.max(1, [...title].length)));
-  const tf = hand(tSize, 700), tW = tw(title, tf), tX = !FX_DEFAULT ? 960 - tW / 2 + side * 60 : side < 0 ? bx + 150 : bx + BOX.w - tW - 30;
-  const st = fxStart(i);   // v1.3：卷角、橡皮擦换过来的镜头等盖成空白纸再开始写
-  const tTimes = seq(st + 0.15, title, Math.min(0.06, Math.max(0.02, (s.end - st) * 0.25 / Math.max(1, [...title].length))));
-  const sk = new Sk(300 + i * 17).penOn();
-  sk.rrect(bx, by, BOX.w, BOX.h, 26, { w: 3.6 });
-  sk.lead([[tX + tW / 2, y0 + 205], [tX + tW / 2 + side * 40, by - 4]], { w: 2.4, r: 6 });
-  // 旁边的信息小卡 + 指向框的引线
-  const ccx = side < 0 ? 1540 : 380, ccy = y0 + 500, card = FX_DEFAULT ? CARDS[i % 3](ccx, ccy, 2000 + i * 7, 1.3) : null;
-  const clead = FX_DEFAULT ? new Sk(2003 + i * 7).lead([[ccx + side * 172, ccy - 70], [side < 0 ? bx + BOX.w + 8 : bx - 8, ccy - 120]], { w: 2.4, r: 6 }).penOn() : null;
-  // 关键词排版：每个词一格，一行放不下就换行，每行在框里居中
-  const kws = (s.keywords || []).filter(Boolean), KF = hand(64, 700);
-  const items = kws.map((w, j) => { const role = roleOf(w), m = MS(w, st + 0.4 + 0.45 * j) - 0.05; return { w, role, t0: FX_DEFAULT ? Math.max(st + 0.3, m) : m, tw: tw(w, KF), times: null }; });
-  items.forEach((it) => { it.box = it.tw + (it.role ? 40 : 10); it.times = seq(it.t0, it.w, 0.06); });
-  const rows = []; let row = [], rw = 0;
-  for (const it of items) { if (row.length && rw + it.box + 70 > BOX.w - 120) { rows.push(row); row = []; rw = 0; } row.push(it); rw += it.box + 70; }
-  if (row.length) rows.push(row);
-  const rh = 130, ry0 = by + BOX.h / 2 - (FX_DEFAULT ? 40 : 0) - (rows.length - 1) * rh / 2;
-  rows.forEach((r, ri) => { const tot = r.reduce((a, it) => a + it.box, 0) + 70 * (r.length - 1); let x = bcx - tot / 2;
-    r.forEach((it) => { it.x = x; it.y = ry0 + ri * rh; x += it.box + 70; }); });
-  // 灰色波浪占位线：最多 3 行，写的时刻均匀摊在镜头里
-  const fy0 = (rows.length ? ry0 + (rows.length - 1) * rh : by + 60) + 96, fills = [];
-  for (let r = 0; FX_DEFAULT && r < 3 && fy0 + r * 56 < by + BOX.h - 34; r++) {
-    const x0 = bx + 80 + (r % 2) * 40, x1 = bx + BOX.w - 100 - ((r * 137) % 3) * 80;
-    fills.push({ sk: new Sk(310 + i * 17 + r).filler(x0, fy0 + r * 56, x1, { w: 2.4 }).penOn(), t0: Math.max(st + 0.9, s.start + (s.end - s.start) * (r + 1) / 4) });
-  }
-  return { s, i, y0, st, title, tf, tX, tTimes, sk, items, fills, card, clead, ccx, ccy };
+const SEC_H = 1000, BOX = { w: 1120, y: 245, h: 540 }, CARDS = [cardText, cardImg, cardWave];
+
+const glCv = document.getElementById('gl');
+const stage3D = Craft3D.createStage(glCv, {
+  ortho: true,
+  frustumHeight: 5.4,
+  studio: 'editorialPaper',
+  exposure: 1.02,
+  shadows: true,
+  ambientColor: 0xfffcf5,
+  ambientIntensity: 0.65,
+  keyColor: 0xffffff,
+  keyIntensity: 1.55,
+  fillColor: 0xe6ecfa,
+  fillIntensity: 0.45,
+  rimColor: 0xffe4cc,
+  rimIntensity: 0.4,
 });
-// 镜头：开场看第一段，之后每个镜头开始前 0.2 秒往下移到那一段；默认动效里是卷角、橡皮擦的交界，等盖成空白纸那一刻直接跳过去（'cut'）
-CAM0 = { x: 960, y: SECS[0].y0 + 430, z: 0.95 };
+const { renderer, scene, camera } = stage3D;
+
+// 纸面浅铅笔投影承接层
+const sketchShadowPlane = new THREE.Mesh(
+  new THREE.PlaneGeometry(24, 24),
+  new THREE.ShadowMaterial({ color: 0x15192d, opacity: 0.11 })
+);
+sketchShadowPlane.rotation.x = -Math.PI / 2;
+sketchShadowPlane.position.y = -1.35;
+sketchShadowPlane.receiveShadow = true;
+scene.add(sketchShadowPlane);
+
+const BP_GROUPS = TL.shots.map((_, i) => {
+  const grp = new THREE.Group();
+  scene.add(grp);
+
+  // 中央钢笔线稿精密立体主体（爆炸拆解叠层架构）
+  const basePlate = Craft3D.createBlueprintPart(Craft3D.roundedBoxGeo(3.2, 0.24, 2.2, 0.06, 3), { accent: 'paper' });
+  basePlate.position.y = -1.05;
+  grp.add(basePlate);
+
+  const coreHex = Craft3D.createBlueprintPart(
+    i % 2 === 0 ? Craft3D.hexPrismGeo(0.95, 0.55, 0.05) : new THREE.OctahedronGeometry(0.82, 0),
+    { accent: 'orange' }
+  );
+  coreHex.position.y = 0.05;
+  grp.add(coreHex);
+
+  const ring = Craft3D.createBlueprintPart(Craft3D.precisionRingGeo(1.35, 1.52, 0.07, 64), { accent: 'ink' });
+  ring.rotation.x = Math.PI * 0.36;
+  grp.add(ring);
+
+  const kws = (TL.shots[i].keywords || []).filter(Boolean);
+  const parts = kws.map((w, j) => {
+    const role = roleOf(w);
+    const acc = role === 'A' ? 'orange' : role === 'B' ? 'ink' : (j % 2 ? 'tint' : 'paper');
+    const part = Craft3D.createBlueprintPart(Craft3D.roundedBoxGeo(1.05, 0.42, 0.85, 0.05, 3), { accent: acc });
+    const a = (j / Math.max(1, kws.length)) * TAU - 0.5;
+    const tx = Math.cos(a) * 2.35, tz = Math.sin(a) * 1.45, ty = -0.35 + (j % 2) * 0.72;
+    part.position.set(tx, ty, tz);
+    grp.add(part);
+    return { w, role, part, tx, ty, tz, a };
+  });
+
+  grp.userData = { basePlate, coreHex, ring, parts };
+  return grp;
+});
+
+const SECS = TL.shots.map((s, i) => {
+  const y0 = i * SEC_H, side = i % 2 ? 1 : -1;
+  const bx = side < 0 ? 150 : 650, by = y0 + BOX.y;
+  const title = s.title || `镜头 ${i + 1}`;
+  const tSize = Math.min(72, Math.floor(1020 / Math.max(1, [...title].length)));
+  const tf = hand(tSize, 700), tW = tw(title, tf), tX = side < 0 ? bx + 140 : bx + BOX.w - tW - 30;
+  const st = fxStart(i);
+  const tTimes = seq(st + 0.12, title, Math.min(0.055, Math.max(0.02, (s.end - st) * 0.22 / Math.max(1, [...title].length))));
+  const sk = new Sk(300 + i * 17).penOn();
+  sk.rrect(bx, by, BOX.w, BOX.h, 24, { w: 3.6 });
+  sk.lead([[tX + tW / 2, y0 + 198], [tX + tW / 2 + side * 36, by - 4]], { w: 2.4, r: 6 });
+
+  const ccx = side < 0 ? 1560 : 360, ccy = y0 + 515;
+  const card = FX_DEFAULT ? CARDS[i % 3](ccx, ccy, 2000 + i * 7, 1.28) : null;
+  const clead = FX_DEFAULT ? new Sk(2003 + i * 7).lead([[ccx + side * 168, ccy - 68], [side < 0 ? bx + BOX.w + 8 : bx - 8, ccy - 115]], { w: 2.4, r: 6 }).penOn() : null;
+
+  const kws = (s.keywords || []).filter(Boolean);
+  const items = kws.map((w, j) => {
+    const role = roleOf(w), m = MS(w, st + 0.35 + 0.42 * j) - 0.05;
+    const t0 = FX_DEFAULT ? Math.max(st + 0.28, m) : m;
+    return { w, role, t0, times: seq(t0, w, 0.055) };
+  });
+  return { s, i, y0, side, bx, by, st, title, tf, tX, tW, tTimes, sk, items, card, clead, ccx, ccy };
+});
+
+CAM0 = { x: 960, y: SECS[0].y0 + 435, z: 0.96 };
 CAM = [];
 SECS.forEach((sc) => {
-  if (sc.i > 0) { const cu = FX_CUTS[sc.i - 1], jump = FX_DEFAULT && cu && (cu.kind === 'curl' || cu.kind === 'erase');
-    CAM.push(jump ? [cu.t0, cu.tj, 960, sc.y0 + 430, 0.95, 'cut'] : [sc.s.start - 0.2, sc.s.start + 0.5, 960, sc.y0 + 430, 0.95]); }
-  // 推近某个关键词再拉开：写完后 0.3 秒推近 1.22 倍，下一个词前 0.5 秒（最多停 2.4 秒）拉开回来
-  const ks = sc.items.map((it) => it.times[it.times.length - 1] + 0.1).concat(sc.s.end - 0.1);
-  if (FX_DEFAULT) sc.items.forEach((it, j) => {
-    const a = ks[j] + 0.2, b = Math.min(ks[j + 1] - 0.6, a + 2.4, sc.s.end - 0.75);
-    if (b - a < 1.2 || a < sc.st + 1) return;
-    CAM.push([a, a + 0.6, it.x + it.box / 2, Math.min(it.y + 40, sc.y0 + 470), 0.95 * 1.22], [b, b + 0.6, 960, sc.y0 + 430, 0.95]);
-  });
+  if (sc.i > 0) {
+    const cu = FX_CUTS[sc.i - 1], jump = FX_DEFAULT && cu && (cu.kind === 'curl' || cu.kind === 'erase');
+    CAM.push(jump ? [cu.t0, cu.tj, 960, sc.y0 + 435, 0.96, 'cut'] : [sc.s.start - 0.2, sc.s.start + 0.5, 960, sc.y0 + 435, 0.96]);
+  }
 });
+
+function renderBlueprintSection(sc, t) {
+  const { s, i, bx, by, st, items } = sc;
+  const dur = Math.max(0.4, s.end - st), u = P(t, st, dur);
+  BP_GROUPS.forEach((grp, k) => { grp.visible = (k === i); });
+
+  const { coreHex, ring, parts } = BP_GROUPS[i].userData;
+  const isoA = 0.55 + u * 0.62;
+  camera.position.set(Math.sin(isoA) * 12, 7.6, Math.cos(isoA) * 12);
+  camera.lookAt(0, -0.15, 0);
+  camera.zoom = 0.95 + 0.08 * sine(u);
+  camera.updateProjectionMatrix();
+  camera.updateMatrixWorld();
+
+  coreHex.rotation.y = t * 0.7;
+  coreHex.position.y = 0.1 + Math.sin(t * 2.0) * 0.08;
+  ring.rotation.z = t * 0.55;
+
+  parts.forEach((pt, j) => {
+    const it = items[j];
+    const p = outBack(P(t, it ? it.t0 : st + 0.3, 0.4));
+    // 爆炸拆解效果：弹出时沿径向微微拉开展示结构
+    const explode = 1 + 0.14 * sine(P(t, (it ? it.t0 : st) + 0.2, 1.2));
+    pt.part.scale.setScalar(Math.max(0.001, p));
+    pt.part.position.set(pt.tx * explode, pt.ty + Math.sin(t * 2.1 + j) * 0.06, pt.tz * explode);
+    pt.part.rotation.y = -pt.a + Math.sin(t * 0.8 + j) * 0.08;
+  });
+
+  renderer.render(scene, camera);
+
+  // 将蓝图 3D 画进手绘框内部，并用钢笔圆点引线 + 手札体标注关键词
+  const fade = outC(P(t, st + 0.2, 0.45));
+  g.save();
+  g.globalAlpha = fade;
+  g.beginPath(); g.roundRect(bx + 10, by + 10, BOX.w - 20, BOX.h - 20, 18); g.clip();
+  g.drawImage(glCv, bx, by, BOX.w, BOX.h);
+  g.restore();
+
+  parts.forEach((pt, j) => {
+    const it = items[j];
+    if (!it || t < it.t0) return;
+    const pr = Craft3D.projectToHUD(camera, pt.part.position.x, pt.part.position.y + 0.28, pt.part.position.z, BOX.w, BOX.h);
+    if (!pr.visible) return;
+    const ax = bx + pr.x, ay = by + pr.y;
+    const f = hand(44, 700), ww = tw(it.w, f);
+    const dir = pr.x < BOX.w * 0.5 ? -1 : 1;
+    const lx = clamp(ax + dir * 115, bx + ww + 36, bx + BOX.w - ww - 36);
+    const ly = clamp(ay - 48 - (j % 2) * 28, by + 56, by + BOX.h - 56);
+    const lp = P(t, it.t0, 0.28);
+
+    g.save();
+    g.strokeStyle = C.ink; g.lineWidth = 2.4;
+    g.beginPath(); g.moveTo(ax, ay); g.lineTo(lx, ly); g.stroke();
+    g.fillStyle = C.orange; g.beginPath(); g.arc(ax, ay, 5.5, 0, TAU); g.fill();
+
+    const tx = dir > 0 ? lx + 10 : lx - ww - 10;
+    const rq = mulberry32(900 + i * 53 + j);
+    if (it.role) {
+      blockQuad(tx - 10, ly - 30, ww + 20, 58, it.role === 'B' ? COL_B : COL_A, rq);
+      writeText(it.w, tx, ly + 1, f, '#ffffff', t, it.times, 0.08);
+    } else {
+      g.fillStyle = 'rgba(246,246,239,0.88)';
+      g.fillRect(tx - 6, ly - 26, ww + 12, 50);
+      writeText(it.w, tx, ly + 1, f, C.ink, t, it.times, 0.08);
+      underline(tx, tx + ww, ly + 28, rq, P(t, it.times[it.times.length - 1], 0.25), 4.5, C.orange);
+    }
+    g.restore();
+  });
+}
+
 function drawSections(t, v) {
   for (const sc of SECS) {
     if (!seen(v, sc.y0, sc.y0 + SEC_H)) continue;
-    const { s, i, y0, st, title, tf, tX, tTimes, sk, items } = sc;
+    const { i, y0, st, title, tf, tX, tW, tTimes, sk } = sc;
     if (t < st - 0.3) continue;
-    tag(`@${i + 1}`, tX - 120, y0 + 150, 44, P(t, st, 0.25));
-    writeText(title, tX, y0 + 150, tf, C.ink, t, tTimes, 0.1);
+    tag(`@${i + 1}`, tX - 116, y0 + 146, 42, P(t, st, 0.25));
+    writeText(title, tX, y0 + 146, tf, C.ink, t, tTimes, 0.1);
     const r = mulberry32(700 + i * 31);
-    underline(tX, tX + tw(title, tf), y0 + 198, r, P(t, tTimes[tTimes.length - 1], 0.35), 6, C.orange, tTimes[tTimes.length - 1]);
-    sk.at(t, st + 0.25, 0.7);
-    if (sc.card) {   // 小卡停住后轻轻摇
+    underline(tX, tX + tW, y0 + 194, r, P(t, tTimes[tTimes.length - 1], 0.35), 6, C.orange, tTimes[tTimes.length - 1]);
+    sk.at(t, st + 0.2, 0.65);
+    renderBlueprintSection(sc, t);
+    if (sc.card) {
       const sw = 动效.sway(t, i * 1.7, { dy: 3, deg: 1.2 });
-      g.save(); g.translate(sc.ccx, sc.ccy + sw.dy * P(t, st + 1.2, 0.4)); g.rotate(sw.r * P(t, st + 1.2, 0.4)); g.translate(-sc.ccx, -sc.ccy);
-      sc.card.at(t, st + 0.45, 0.8); g.restore();
-      sc.clead.at(t, st + 1.15, 0.3);
-    }
-    for (const f of sc.fills) f.sk.at(t, f.t0, 0.9);
-    for (const it of items) {
-      if (t < it.t0) continue;
-      const rq = mulberry32(900 + i * 53 + Math.round(it.x));
-      if (it.role) {   // 强调色 A/B：实心色块（先刷出来）+ 白字
-        const p = P(t, it.t0, 0.18);
-        g.save(); g.beginPath(); g.rect(it.x - 12, it.y - 60, (it.box + 24) * p, 120); g.clip();
-        blockQuad(it.x, it.y - 42, it.box, 86, it.role === 'B' ? COL_B : COL_A, rq); g.restore();
-        writeText(it.w, it.x + 20, it.y + 2, hand(64, 700), '#ffffff', t, it.times, 0.1);
-      } else {
-        writeText(it.w, it.x + 5, it.y + 2, hand(64, 700), C.ink, t, it.times, 0.1);
-        underline(it.x, it.x + it.box, it.y + 46, rq, P(t, it.times[it.times.length - 1], 0.3), 6, C.orange, it.times[it.times.length - 1]);
-      }
+      g.save(); g.translate(sc.ccx, sc.ccy + sw.dy * P(t, st + 1.1, 0.4)); g.rotate(sw.r * P(t, st + 1.1, 0.4)); g.translate(-sc.ccx, -sc.ccy);
+      sc.card.at(t, st + 0.4, 0.75); g.restore();
+      sc.clead.at(t, st + 1.05, 0.3);
     }
   }
 }

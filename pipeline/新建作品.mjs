@@ -16,7 +16,9 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SKILL = path.dirname(HERE);
 const STYLES = path.join(SKILL, 'styles');
 const die = (m) => { console.error(`✗ ${m}`); process.exit(1); };
-const styleNames = () => fs.readdirSync(STYLES).filter((n) => fs.existsSync(path.join(STYLES, n, '示例_Token.html')));
+const styleNames = () => fs.readdirSync(STYLES).filter((n) =>
+  fs.existsSync(path.join(STYLES, n, '模板.html')) || fs.existsSync(path.join(STYLES, n, '示例_Token.html'))
+);
 
 const args = process.argv.slice(2);
 const o = { _: [] };
@@ -57,7 +59,10 @@ if (o.help || !o._.length || !o.style) {
 // 风格：接受「手绘笔记」「S22」「手绘」这种写法
 const names = styleNames();
 const style = names.find((n) => n === o.style) || names.find((n) => n.includes(o.style)) ||
-  names.find((n) => (fs.readFileSync(path.join(STYLES, n, '示例_Token.html'), 'utf8').slice(0, 600)).includes(o.style));
+  names.find((n) => {
+    const refFile = fs.existsSync(path.join(STYLES, n, '示例_Token.html')) ? '示例_Token.html' : '模板.html';
+    return fs.readFileSync(path.join(STYLES, n, refFile), 'utf8').slice(0, 600).includes(o.style);
+  });
 if (!style) die(`没有「${o.style}」这套风格。现有：${names.join('、')}`);
 const sdir = path.join(STYLES, style);
 
@@ -71,8 +76,11 @@ const put = (src, name, force = false) => {
 };
 
 const cfg = { style, audio: '口播.wav', subtitles: '字幕.json', storyboard: '分镜.json', timeline: 'timeline.js', page: 'index.html', output: `${path.basename(dir)}.mp4` };
-const fast = /立体卡通|超现实拼贴|复古剪纸|黑底科技/.test(style);   // 满屏颗粒的几套，PNG 截图慢，默认用 jpeg 截图
+const tplCheck = fs.existsSync(path.join(sdir, '模板.html')) ? fs.readFileSync(path.join(sdir, '模板.html'), 'utf8') : '';
+const usesThree = /three\.min\.js/.test(tplCheck) || /3D/i.test(style);
+const fast = usesThree || /立体卡通|超现实拼贴|复古剪纸|黑底科技|霓虹赛博/.test(style);
 if (fast) cfg.format = 'jpeg';
+if (usesThree) cfg.gpu = true;
 
 if (o.example) {
   const ex = path.join(SKILL, 'examples', o.example);
@@ -98,6 +106,13 @@ if (o.example) {
   if (tpl === '示例_Token.html') console.log('  这套还没有通用模板：index.html 是 Token 例子的页面，按 风格卡.md「换内容时怎么改」保留底座、重写场景');
 }
 put(path.join(HERE, '动效部件.js'), '动效部件.js');   // v1.2：转场和次要动作的共用部件，模板里的 fxBefore / fxAfter 调它
+const idxContent = fs.existsSync(path.join(dir, 'index.html')) ? fs.readFileSync(path.join(dir, 'index.html'), 'utf8') : '';
+if ((/3D/i.test(style) || /three\.min\.js/.test(idxContent)) && fs.existsSync(path.join(HERE, 'vendor/three.min.js'))) {
+  put(path.join(HERE, 'vendor/three.min.js'), 'three.min.js');
+  if (fs.existsSync(path.join(HERE, 'vendor/three_craft.js'))) {
+    put(path.join(HERE, 'vendor/three_craft.js'), 'three_craft.js');
+  }
+}
 const cfgPath = path.join(dir, '作品.json');
 if (!fs.existsSync(cfgPath) || o.force) fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
 console.log(`  ✓ 作品.json（风格 ${style}${fast ? '，截图用 jpeg' : ''}）`);
